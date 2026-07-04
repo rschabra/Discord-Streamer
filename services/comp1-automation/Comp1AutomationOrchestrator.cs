@@ -202,6 +202,7 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             var keybindTraceLines = await RunDiscordScreenShareKeybindAsync(
                 options.DiscordScreenShareKeybind,
                 options.DiscordScreenShareKeybindDelayMs,
+                options.AutoHotkeyExecutablePath,
                 cancellationToken);
 
             foreach (var line in keybindTraceLines)
@@ -353,6 +354,7 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
     private static async Task<IReadOnlyList<string>> RunDiscordScreenShareKeybindAsync(
         string keybind,
         int delayBeforeKeybindMs,
+        string? autoHotkeyExecutablePath,
         CancellationToken cancellationToken)
     {
         var traceLines = new List<string>();
@@ -361,12 +363,94 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         traceLines.Add($"Waiting {stabilizedDelayMs}ms before sending the Discord screen share keybind.");
         await Task.Delay(stabilizedDelayMs, cancellationToken);
 
+        var autoHotkeyTraceLines = await TryRunAutoHotkeyKeybindAsync(
+            keybind,
+            autoHotkeyExecutablePath,
+            cancellationToken);
+
+        if (autoHotkeyTraceLines is not null)
+        {
+            traceLines.AddRange(autoHotkeyTraceLines);
+            return traceLines;
+        }
+
         var virtualKeys = ParseKeybindVirtualKeys(keybind);
         SendKeyChord(virtualKeys);
-        traceLines.Add($"Injected Discord screen share keybind '{keybind}' with SendInput.");
+        traceLines.Add($"Injected Discord screen share keybind '{keybind}' with native keyboard input.");
 
         await Task.Delay(1500, cancellationToken);
         return traceLines;
+    }
+
+    private static async Task<IReadOnlyList<string>?> TryRunAutoHotkeyKeybindAsync(
+        string keybind,
+        string? configuredExecutablePath,
+        CancellationToken cancellationToken)
+    {
+        foreach (var executableCandidate in GetAutoHotkeyExecutableCandidates(configuredExecutablePath))
+        {
+            if (!IsAutoHotkeyCandidateAvailable(executableCandidate))
+            {
+                continue;
+            }
+
+            var tempScriptPath = Path.Combine(Path.GetTempPath(), $"discord-streamer-{Guid.NewGuid():N}.ahk");
+            try
+            {
+                await File.WriteAllTextAsync(tempScriptPath, BuildAutoHotkeyScript(keybind), Encoding.UTF8, cancellationToken);
+
+                using var process = Process.Start(new ProcessStartInfo
+                {
+                    FileName = executableCandidate,
+                    Arguments = $"\"{tempScriptPath}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                });
+
+                if (process is null)
+                {
+                    continue;
+                }
+
+                await process.WaitForExitAsync(cancellationToken);
+                var stdOut = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+                var stdErr = await process.StandardError.ReadToEndAsync(cancellationToken);
+
+                if (process.ExitCode == 0)
+                {
+                    var lines = new List<string>
+                    {
+                        $"Injected Discord screen share keybind '{keybind}' using AutoHotkey via '{executableCandidate}'."
+                    };
+
+                    lines.AddRange(stdOut
+                        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Where(line => !string.IsNullOrWhiteSpace(line)));
+
+                    await Task.Delay(1500, cancellationToken);
+                    return lines;
+                }
+            }
+            catch
+            {
+                // Fall back to the next candidate or native injection below.
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(tempScriptPath);
+                }
+                catch
+                {
+                    // Best-effort cleanup only.
+                }
+            }
+        }
+
+        return null;
     }
 
     private static async Task<IReadOnlyList<string>> RunDiscordShareDialogStartAsync(
@@ -880,6 +964,107 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             }
         }
     };
+
+    private static IEnumerable<string> GetAutoHotkeyExecutableCandidates(string? configuredExecutablePath)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredExecutablePath))
+        {
+            yield return configuredExecutablePath;
+        }
+
+        yield return "AutoHotkey64.exe";
+        yield return "AutoHotkey.exe";
+        yield return @"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe";
+        yield return @"C:\Program Files\AutoHotkey\v2\AutoHotkey.exe";
+        yield return @"C:\Program Files\AutoHotkey\AutoHotkey64.exe";
+        yield return @"C:\Program Files\AutoHotkey\AutoHotkey.exe";
+    }
+
+    private static bool IsAutoHotkeyCandidateAvailable(string executableCandidate)
+    {
+        if (Path.IsPathRooted(executableCandidate))
+        {
+            return File.Exists(executableCandidate);
+        }
+
+        return true;
+    }
+
+    private static string BuildAutoHotkeyScript(string keybind)
+    {
+        var sendString = ConvertToAutoHotkeySendString(keybind);
+        return $$"""
+            #Requires AutoHotkey v2.0
+            SendMode "Event"
+            SetKeyDelay 50, 50
+            Send "{{sendString}}"
+            """;
+    }
+
+    private static string ConvertToAutoHotkeySendString(string keybind)
+    {
+        var tokens = keybind
+            .Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToArray();
+
+        if (tokens.Length == 0)
+        {
+            throw new InvalidOperationException("DiscordScreenShareKeybind was empty.");
+        }
+
+        var builder = new StringBuilder();
+        string? primaryKeyToken = null;
+
+        foreach (var token in tokens)
+        {
+            if (token.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) || token.Equals("Control", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Append('^');
+            }
+            else if (token.Equals("Alt", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Append('!');
+            }
+            else if (token.Equals("Shift", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Append('+');
+            }
+            else
+            {
+                primaryKeyToken = token;
+            }
+        }
+
+        if (primaryKeyToken is null)
+        {
+            throw new InvalidOperationException($"DiscordScreenShareKeybind '{keybind}' did not include a non-modifier key.");
+        }
+
+        builder.Append(ConvertPrimaryKeyTokenToAutoHotkey(primaryKeyToken));
+        return builder.ToString();
+    }
+
+    private static string ConvertPrimaryKeyTokenToAutoHotkey(string token)
+    {
+        if (token.Length == 1)
+        {
+            return token;
+        }
+
+        return token.ToUpperInvariant() switch
+        {
+            "SPACE" => "{Space}",
+            "TAB" => "{Tab}",
+            "ENTER" => "{Enter}",
+            "ESC" or "ESCAPE" => "{Esc}",
+            "UP" => "{Up}",
+            "DOWN" => "{Down}",
+            "LEFT" => "{Left}",
+            "RIGHT" => "{Right}",
+            _ when token.StartsWith("F", StringComparison.OrdinalIgnoreCase) => $"{{{token.ToUpperInvariant()}}}",
+            _ => throw new InvalidOperationException($"DiscordScreenShareKeybind token '{token}' is not supported for AutoHotkey.")
+        };
+    }
 
     private static string[] BuildWindowSearchFragments(string resolvedWindowTitle, string? windowTitleHint)
     {

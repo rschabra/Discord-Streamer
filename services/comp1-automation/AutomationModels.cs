@@ -52,4 +52,5 @@ public sealed class Comp1AutomationOptions
     public string? DiscordExecutablePath { get; init; }
     public string? DiscordScreenShareKeybind { get; init; }
     public int DiscordScreenShareKeybindDelayMs { get; init; } = 2500;
+    public string? AutoHotkeyExecutablePath { get; init; }
 }

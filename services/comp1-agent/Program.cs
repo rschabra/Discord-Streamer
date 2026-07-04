@@ -13,7 +13,8 @@ builder.Services.AddSingleton<IComp1Automation>(_ => new Comp1AutomationOrchestr
     PreferredBrowserPath = comp1Settings.PreferredBrowserPath,
     DiscordExecutablePath = comp1Settings.DiscordExecutablePath,
     DiscordScreenShareKeybind = comp1Settings.DiscordScreenShareKeybind,
-    DiscordScreenShareKeybindDelayMs = comp1Settings.DiscordScreenShareKeybindDelayMs
+    DiscordScreenShareKeybindDelayMs = comp1Settings.DiscordScreenShareKeybindDelayMs,
+    AutoHotkeyExecutablePath = comp1Settings.AutoHotkeyExecutablePath
 }));
 
 var app = builder.Build();
@@ -443,6 +444,7 @@ internal sealed class Comp1Settings
     public string? DiscordExecutablePath { get; init; }
     public string? DiscordScreenShareKeybind { get; init; }
     public int DiscordScreenShareKeybindDelayMs { get; init; } = 2500;
+    public string? AutoHotkeyExecutablePath { get; init; }
     public string RdpHost { get; init; } = "127.0.0.1";
     public int RdpPort { get; init; } = 3389;
     public int TokenLifetimeMinutes { get; init; } = 480;
