@@ -173,116 +173,132 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             Info($"Include system audio: {request.IncludeSystemAudio}.")
         };
 
-        if (!string.IsNullOrWhiteSpace(request.BrowserUrl))
-        {
-            var browserResult = await OpenBrowserAsync(new BrowserOpenRequest
-            {
-                Url = request.BrowserUrl
-            }, cancellationToken);
-
-            trace.AddRange(browserResult.TraceEntries);
-            if (!browserResult.Success)
-            {
-                return new AutomationResult
-                {
-                    Success = false,
-                    Error = browserResult.Error,
-                    TraceEntries = trace
-                };
-            }
-        }
-
-        var discordResult = await LaunchDiscordAsync(cancellationToken);
-        trace.AddRange(discordResult.TraceEntries);
-        if (!discordResult.Success)
-        {
-            return new AutomationResult
-            {
-                Success = false,
-                Error = discordResult.Error,
-                TraceEntries = trace
-            };
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.DiscordServerName) || !string.IsNullOrWhiteSpace(request.DiscordVoiceChannelName))
-        {
-            var joinResult = await JoinVoiceChannelAsync(new JoinVoiceChannelRequest
-            {
-                ServerName = request.DiscordServerName ?? "unspecified",
-                VoiceChannelName = request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? "unspecified"
-            }, cancellationToken);
-
-            trace.AddRange(joinResult.TraceEntries);
-            if (!joinResult.Success)
-            {
-                return new AutomationResult
-                {
-                    Success = false,
-                    Error = joinResult.Error,
-                    TraceEntries = trace
-                };
-            }
-        }
-        else
-        {
-            trace.Add(Info("Join-call step was skipped because no server/channel names were provided."));
-        }
-
         WindowCandidate? matchedTargetWindow = null;
-        if (request.StreamTarget.Kind is "browser" or "application")
-        {
-            var resolution = await ResolveTargetWindowAsync(request.StreamTarget, cancellationToken);
-            matchedTargetWindow = resolution.SelectedWindow;
-            trace.Add(Info($"Resolved stream target window '{matchedTargetWindow.MainWindowTitle}' from process '{matchedTargetWindow.ProcessName}' (PID {matchedTargetWindow.ProcessId})."));
 
-            if (resolution.CandidateCount > 1)
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(request.BrowserUrl))
             {
-                trace.Add(Info($"Multiple candidate windows matched the hint; selected the highest-confidence match out of {resolution.CandidateCount} candidates."));
-            }
-        }
-        else
-        {
-            trace.Add(Info("Display target selected; window hint resolution was skipped."));
-        }
+                var browserResult = await OpenBrowserAsync(new BrowserOpenRequest
+                {
+                    Url = request.BrowserUrl
+                }, cancellationToken);
 
-        if (matchedTargetWindow is null)
-        {
+                trace.AddRange(browserResult.TraceEntries);
+                if (!browserResult.Success)
+                {
+                    return new AutomationResult
+                    {
+                        Success = false,
+                        Error = browserResult.Error,
+                        TraceEntries = trace
+                    };
+                }
+            }
+
+            var discordResult = await LaunchDiscordAsync(cancellationToken);
+            trace.AddRange(discordResult.TraceEntries);
+            if (!discordResult.Success)
+            {
+                return new AutomationResult
+                {
+                    Success = false,
+                    Error = discordResult.Error,
+                    TraceEntries = trace
+                };
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.DiscordServerName) || !string.IsNullOrWhiteSpace(request.DiscordVoiceChannelName))
+            {
+                var joinResult = await JoinVoiceChannelAsync(new JoinVoiceChannelRequest
+                {
+                    ServerName = request.DiscordServerName ?? "unspecified",
+                    VoiceChannelName = request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? "unspecified"
+                }, cancellationToken);
+
+                trace.AddRange(joinResult.TraceEntries);
+                if (!joinResult.Success)
+                {
+                    return new AutomationResult
+                    {
+                        Success = false,
+                        Error = joinResult.Error,
+                        TraceEntries = trace
+                    };
+                }
+            }
+            else
+            {
+                trace.Add(Info("Join-call step was skipped because no server/channel names were provided."));
+            }
+
+            if (request.StreamTarget.Kind is "browser" or "application")
+            {
+                var resolution = await ResolveTargetWindowAsync(request.StreamTarget, cancellationToken);
+                matchedTargetWindow = resolution.SelectedWindow;
+                trace.Add(Info($"Resolved stream target window '{matchedTargetWindow.MainWindowTitle}' from process '{matchedTargetWindow.ProcessName}' (PID {matchedTargetWindow.ProcessId})."));
+
+                if (resolution.CandidateCount > 1)
+                {
+                    trace.Add(Info($"Multiple candidate windows matched the hint; selected the highest-confidence match out of {resolution.CandidateCount} candidates."));
+                }
+            }
+            else
+            {
+                trace.Add(Info("Display target selected; window hint resolution was skipped."));
+            }
+
+            if (matchedTargetWindow is null)
+            {
+                return new AutomationResult
+                {
+                    Success = false,
+                    Error = "Display streaming is not implemented yet; provide an application or browser window hint.",
+                    TraceEntries = trace
+                };
+            }
+
+            var activeDiscordProcess = await WaitForDiscordWindowAsync(cancellationToken);
+            trace.Add(Info($"Preparing Discord share dialog with process {activeDiscordProcess.Id}."));
+
+            var shareTraceLines = await RunDiscordShareDialogStartAsync(
+                matchedTargetWindow,
+                request.StreamTarget.WindowTitleHint,
+                request.IncludeSystemAudio,
+                activeDiscordProcess.Id,
+                cancellationToken);
+
+            foreach (var line in shareTraceLines)
+            {
+                trace.Add(Info(line));
+            }
+
+            trace.Add(Info("Discord share-dialog automation attempted to start the stream."));
+            trace.Add(Info($"Requested Discord destination: {request.DiscordServerName ?? "unspecified"} / {request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId ?? "unspecified"}."));
+            trace.Add(Info($"Requested window hint: {request.StreamTarget.WindowTitleHint ?? "none"}."));
+
+            await Task.Delay(100, cancellationToken);
+
             return new AutomationResult
             {
-                Success = false,
-                Error = "Display streaming is not implemented yet; provide an application or browser window hint.",
+                Success = true,
+                SelectedWindowTitle = matchedTargetWindow?.MainWindowTitle,
+                SelectedProcessName = matchedTargetWindow?.ProcessName,
                 TraceEntries = trace
             };
         }
-
-        var activeDiscordProcess = await WaitForDiscordWindowAsync(cancellationToken);
-        trace.Add(Info($"Preparing Discord share dialog with process {activeDiscordProcess.Id}."));
-
-        var shareTraceLines = await RunDiscordShareDialogStartAsync(
-            matchedTargetWindow,
-            request.StreamTarget.WindowTitleHint,
-            request.IncludeSystemAudio,
-            activeDiscordProcess.Id,
-            cancellationToken);
-
-        foreach (var line in shareTraceLines)
+        catch (Exception ex)
         {
-            trace.Add(Info(line));
+            trace.Add(Error($"Stream automation failed: {ex.Message}"));
+            return new AutomationResult
+            {
+                Success = false,
+                Error = ex.Message,
+                SelectedWindowTitle = matchedTargetWindow?.MainWindowTitle,
+                SelectedProcessName = matchedTargetWindow?.ProcessName,
+                TraceEntries = trace
+            };
         }
-
-        trace.Add(Info("Discord share-dialog automation attempted to start the stream."));
-        trace.Add(Info($"Requested Discord destination: {request.DiscordServerName ?? "unspecified"} / {request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId ?? "unspecified"}."));
-        trace.Add(Info($"Requested window hint: {request.StreamTarget.WindowTitleHint ?? "none"}."));
-
-        await Task.Delay(100, cancellationToken);
-
-        return new AutomationResult
-        {
-            Success = true,
-            SelectedWindowTitle = matchedTargetWindow?.MainWindowTitle,
-            SelectedProcessName = matchedTargetWindow?.ProcessName,
-            TraceEntries = trace
-        };
     }
 
     public Task<AutomationResult> StopStreamAsync(CancellationToken cancellationToken)
