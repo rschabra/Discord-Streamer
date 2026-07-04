@@ -108,10 +108,9 @@ Request:
 
 Behavior:
 
-- optionally opens the browser URL
-- launches Discord
-- attempts the join-call flow
-- attempts to begin streaming the selected target
+- assumes the browser/app is already open and Discord is already in the target voice call
+- sends the configured Discord screen-share keybind on `COMP1`
+- does not relaunch the browser, refocus the target window, relaunch Discord, or rejoin the voice channel
 - records trace entries and updates state
 
 ### `POST /api/stream/stop`

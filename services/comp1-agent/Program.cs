@@ -161,12 +161,14 @@ app.MapPost("/api/stream/start", async (HttpContext httpContext, StreamStartApiR
         return Results.BadRequest(new { error = result.Error, trace = result.TraceEntries });
     }
 
-    stateStore.SetDiscordRunning(true);
-    stateStore.SetBrowserRunning(!string.IsNullOrWhiteSpace(request.BrowserUrl));
-    stateStore.SetCurrentUrl(request.BrowserUrl);
+    if (!string.IsNullOrWhiteSpace(request.DiscordServerName) || !string.IsNullOrWhiteSpace(request.DiscordVoiceChannelName) || !string.IsNullOrWhiteSpace(request.ChannelDisplayName))
+    {
+        stateStore.SetDiscordRunning(true);
+        stateStore.SetSelectedDiscordServer(request.DiscordServerName);
+        stateStore.SetSelectedDiscordChannel(request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId);
+    }
+
     stateStore.SetStreamActive(true);
-    stateStore.SetSelectedDiscordServer(request.DiscordServerName);
-    stateStore.SetSelectedDiscordChannel(request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId);
     stateStore.SetSelectedStreamWindowTitle(result.SelectedWindowTitle);
     stateStore.ClearLastError();
 
