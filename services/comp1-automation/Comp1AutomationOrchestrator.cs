@@ -507,7 +507,22 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
                     if ($element) { return $element }
                     Start-Sleep -Milliseconds 300
                 }
-                throw "Timed out waiting for a Discord UI element. Names: $($exactNames -join ', ') / $($containsNames -join ', ')"
+                $root = Get-DiscordRoot $processId
+                $visibleNames = Get-VisibleDescendants $root |
+                    ForEach-Object {
+                        try {
+                            $name = $_.Current.Name
+                            $typeName = $_.Current.ControlType.ProgrammaticName
+                            if (-not [string]::IsNullOrWhiteSpace($name)) {
+                                "$name [$typeName]"
+                            }
+                        } catch {}
+                    } |
+                    Select-Object -Unique |
+                    Select-Object -First 40
+
+                $visibleSummary = if ($visibleNames) { $visibleNames -join '; ' } else { 'No visible named controls found.' }
+                throw "Timed out waiting for a Discord UI element. Names: $($exactNames -join ', ') / $($containsNames -join ', '). Visible named controls: $visibleSummary"
             }
 
             function Invoke-AutomationElement($element, $description) {
