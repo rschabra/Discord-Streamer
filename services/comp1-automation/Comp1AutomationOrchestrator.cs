@@ -258,6 +258,24 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
                 };
             }
 
+        if (!string.IsNullOrWhiteSpace(options.DiscordScreenShareKeybind))
+            {
+            trace.Add(Info($"Using configured Discord screen share keybind '{options.DiscordScreenShareKeybind}'."));
+
+            var keybindTraceLines = await RunDiscordScreenShareKeybindAsync(
+                matchedTargetWindow,
+                options.DiscordScreenShareKeybind,
+                cancellationToken);
+
+            foreach (var line in keybindTraceLines)
+            {
+                trace.Add(Info(line));
+            }
+
+            trace.Add(Info("Discord screen share keybind sent. Verify that the registered Firefox game began streaming."));
+            }
+        else
+        {
             var activeDiscordProcess = await WaitForDiscordWindowAsync(cancellationToken);
             trace.Add(Info($"Preparing Discord share dialog with process {activeDiscordProcess.Id}."));
 
@@ -274,6 +292,8 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             }
 
             trace.Add(Info("Discord share-dialog automation attempted to start the stream."));
+        }
+
             trace.Add(Info($"Requested Discord destination: {request.DiscordServerName ?? "unspecified"} / {request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId ?? "unspecified"}."));
             trace.Add(Info($"Requested window hint: {request.StreamTarget.WindowTitleHint ?? "none"}."));
 
@@ -411,6 +431,52 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
                 ? $"Quick switch automation failed with exit code {process.ExitCode}. {stdOut}".Trim()
                 : stdErr.Trim());
         }
+    }
+
+    private static async Task<IReadOnlyList<string>> RunDiscordScreenShareKeybindAsync(
+        WindowCandidate matchedTargetWindow,
+        string keybind,
+        CancellationToken cancellationToken)
+    {
+        var sendKeysHotkey = ConvertToSendKeysHotkey(keybind);
+        var escapedHotkey = sendKeysHotkey.Replace("'", "''");
+        var script = $$"""
+            $wshell = New-Object -ComObject WScript.Shell
+
+            if (-not $wshell.AppActivate({{matchedTargetWindow.ProcessId}})) {
+                throw "Target application window '{{matchedTargetWindow.MainWindowTitle}}' was not focusable."
+            }
+            Start-Sleep -Milliseconds 800
+            Write-Output "Activated target window '{{matchedTargetWindow.MainWindowTitle}}'."
+
+            $wshell.SendKeys('{{escapedHotkey}}')
+            Start-Sleep -Milliseconds 1500
+            Write-Output "Sent Discord screen share keybind '{{keybind}}'."
+            """;
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script.Replace("\"", "\\\"")}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true
+        }) ?? throw new InvalidOperationException("Failed to start Discord keybind automation process.");
+
+        await process.WaitForExitAsync(cancellationToken);
+
+        var stdOut = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stdErr = await process.StandardError.ReadToEndAsync(cancellationToken);
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(stdErr)
+                ? $"Screen share keybind automation failed with exit code {process.ExitCode}. {stdOut}".Trim()
+                : stdErr.Trim());
+        }
+
+        return stdOut.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     private static async Task<IReadOnlyList<string>> RunDiscordShareDialogStartAsync(
@@ -759,6 +825,71 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
     {
         var compactChannelName = new string(voiceChannelName.Where(character => !char.IsWhiteSpace(character)).ToArray());
         return $"{serverName} !{compactChannelName}";
+    }
+
+    private static string ConvertToSendKeysHotkey(string keybind)
+    {
+        var tokens = keybind
+            .Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToArray();
+
+        if (tokens.Length == 0)
+        {
+            throw new InvalidOperationException("DiscordScreenShareKeybind was empty.");
+        }
+
+        var builder = new StringBuilder();
+        string? primaryKeyToken = null;
+
+        foreach (var token in tokens)
+        {
+            if (token.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) || token.Equals("Control", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Append('^');
+            }
+            else if (token.Equals("Alt", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Append('%');
+            }
+            else if (token.Equals("Shift", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Append('+');
+            }
+            else
+            {
+                primaryKeyToken = token;
+            }
+        }
+
+        if (primaryKeyToken is null)
+        {
+            throw new InvalidOperationException($"DiscordScreenShareKeybind '{keybind}' did not include a non-modifier key.");
+        }
+
+        builder.Append(ConvertPrimaryKeyToken(primaryKeyToken));
+        return builder.ToString();
+    }
+
+    private static string ConvertPrimaryKeyToken(string token)
+    {
+        if (token.Length == 1)
+        {
+            return EscapeSendKeysText(token);
+        }
+
+        return token.ToUpperInvariant() switch
+        {
+            "SPACE" => " ",
+            "TAB" => "{TAB}",
+            "ENTER" => "{ENTER}",
+            "ESC" or "ESCAPE" => "{ESC}",
+            "UP" => "{UP}",
+            "DOWN" => "{DOWN}",
+            "LEFT" => "{LEFT}",
+            "RIGHT" => "{RIGHT}",
+            _ when token.StartsWith("F", StringComparison.OrdinalIgnoreCase) => $"{{{token.ToUpperInvariant()}}}",
+            _ => throw new InvalidOperationException($"DiscordScreenShareKeybind token '{token}' is not supported yet.")
+        };
     }
 
     private static string[] BuildWindowSearchFragments(string resolvedWindowTitle, string? windowTitleHint)

@@ -11,7 +11,8 @@ builder.Services.AddSingleton<ApplianceStateStore>();
 builder.Services.AddSingleton<IComp1Automation>(_ => new Comp1AutomationOrchestrator(new Comp1AutomationOptions
 {
     PreferredBrowserPath = comp1Settings.PreferredBrowserPath,
-    DiscordExecutablePath = comp1Settings.DiscordExecutablePath
+    DiscordExecutablePath = comp1Settings.DiscordExecutablePath,
+    DiscordScreenShareKeybind = comp1Settings.DiscordScreenShareKeybind
 }));
 
 var app = builder.Build();
@@ -437,6 +438,7 @@ internal sealed class Comp1Settings
     public string OperatorPassword { get; init; } = "replace-with-a-strong-password";
     public string? PreferredBrowserPath { get; init; }
     public string? DiscordExecutablePath { get; init; }
+    public string? DiscordScreenShareKeybind { get; init; }
     public string RdpHost { get; init; } = "127.0.0.1";
     public int RdpPort { get; init; } = 3389;
     public int TokenLifetimeMinutes { get; init; } = 480;

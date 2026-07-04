@@ -50,4 +50,5 @@ public sealed class Comp1AutomationOptions
 {
     public string? PreferredBrowserPath { get; init; }
     public string? DiscordExecutablePath { get; init; }
+    public string? DiscordScreenShareKeybind { get; init; }
 }
