@@ -138,7 +138,10 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             var searchQuery = $"{request.ServerName} #{request.VoiceChannelName}";
             trace.Add(Info($"Using Discord quick switch search query '{searchQuery}'."));
 
-            await RunDiscordQuickSwitchJoinAsync(searchQuery, cancellationToken);
+            var discordProcess = await WaitForDiscordWindowAsync(cancellationToken);
+            trace.Add(Info($"Using Discord process {discordProcess.Id} with window '{discordProcess.MainWindowTitle}'."));
+
+            await RunDiscordQuickSwitchJoinAsync(searchQuery, discordProcess.Id, cancellationToken);
 
             trace.Add(Info("Discord quick switch join attempt sent."));
             trace.Add(Info("Verify that the target voice channel was unique and visible in Discord search results."));
@@ -264,21 +267,66 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         Message = message
     };
 
-    private static async Task RunDiscordQuickSwitchJoinAsync(string searchQuery, CancellationToken cancellationToken)
+    private static async Task<Process> WaitForDiscordWindowAsync(CancellationToken cancellationToken)
+    {
+        var timeoutAt = DateTime.UtcNow.AddSeconds(15);
+
+        while (DateTime.UtcNow < timeoutAt)
+        {
+            var discordProcess = Process.GetProcessesByName("Discord")
+                .OrderByDescending(GetSafeStartTime)
+                .FirstOrDefault(process =>
+                {
+                    try
+                    {
+                        process.Refresh();
+                        return process.MainWindowHandle != IntPtr.Zero;
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                });
+
+            if (discordProcess is not null)
+            {
+                discordProcess.Refresh();
+                return discordProcess;
+            }
+
+            await Task.Delay(500, cancellationToken);
+        }
+
+        throw new InvalidOperationException("Discord process started, but no focusable main window appeared within 15 seconds.");
+    }
+
+    private static DateTime GetSafeStartTime(Process process)
+    {
+        try
+        {
+            return process.StartTime;
+        }
+        catch
+        {
+            return DateTime.MinValue;
+        }
+    }
+
+    private static async Task RunDiscordQuickSwitchJoinAsync(string searchQuery, int discordProcessId, CancellationToken cancellationToken)
     {
         var escapedQuery = EscapeSendKeysText(searchQuery);
         var script = $$"""
             $wshell = New-Object -ComObject WScript.Shell
-            if (-not $wshell.AppActivate('Discord')) { throw 'Discord window not found or not focusable.' }
-            Start-Sleep -Milliseconds 700
+            if (-not $wshell.AppActivate({{discordProcessId}})) { throw 'Discord process window not found or not focusable.' }
+            Start-Sleep -Milliseconds 1200
             $wshell.SendKeys('^k')
-            Start-Sleep -Milliseconds 400
-            $wshell.SendKeys('^a')
-            Start-Sleep -Milliseconds 100
-            $wshell.SendKeys('{BACKSPACE}')
-            Start-Sleep -Milliseconds 200
-            $wshell.SendKeys('{{escapedQuery}}')
             Start-Sleep -Milliseconds 600
+            $wshell.SendKeys('^a')
+            Start-Sleep -Milliseconds 150
+            $wshell.SendKeys('{BACKSPACE}')
+            Start-Sleep -Milliseconds 300
+            $wshell.SendKeys('{{escapedQuery}}')
+            Start-Sleep -Milliseconds 900
             $wshell.SendKeys('{ENTER}')
             """;
 
