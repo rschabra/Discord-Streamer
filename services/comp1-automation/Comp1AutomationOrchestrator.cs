@@ -171,100 +171,35 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         {
             Info("Starting stream workflow."),
             Info($"Stream target kind: {request.StreamTarget.Kind}."),
-            Info($"Include system audio: {request.IncludeSystemAudio}.")
+            Info($"Include system audio: {request.IncludeSystemAudio}."),
+            Info("Start-stream assumes the browser/app is already open and Discord is already connected to the target voice channel.")
         };
-
-        WindowCandidate? matchedTargetWindow = null;
 
         try
         {
-            if (!string.IsNullOrWhiteSpace(request.BrowserUrl))
-            {
-                var browserResult = await OpenBrowserAsync(new BrowserOpenRequest
-                {
-                    Url = request.BrowserUrl
-                }, cancellationToken);
-
-                trace.AddRange(browserResult.TraceEntries);
-                if (!browserResult.Success)
-                {
-                    return new AutomationResult
-                    {
-                        Success = false,
-                        Error = browserResult.Error,
-                        TraceEntries = trace
-                    };
-                }
-            }
-
-            var discordResult = await LaunchDiscordAsync(cancellationToken);
-            trace.AddRange(discordResult.TraceEntries);
-            if (!discordResult.Success)
+            if (string.IsNullOrWhiteSpace(options.DiscordScreenShareKeybind))
             {
                 return new AutomationResult
                 {
                     Success = false,
-                    Error = discordResult.Error,
+                    Error = "DiscordScreenShareKeybind is not configured on COMP1.",
                     TraceEntries = trace
                 };
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.BrowserUrl))
+            {
+                trace.Add(Info("Browser URL was provided but is intentionally ignored during start-stream."));
             }
 
             if (!string.IsNullOrWhiteSpace(request.DiscordServerName) || !string.IsNullOrWhiteSpace(request.DiscordVoiceChannelName))
             {
-                var joinResult = await JoinVoiceChannelAsync(new JoinVoiceChannelRequest
-                {
-                    ServerName = request.DiscordServerName ?? "unspecified",
-                    VoiceChannelName = request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? "unspecified"
-                }, cancellationToken);
-
-                trace.AddRange(joinResult.TraceEntries);
-                if (!joinResult.Success)
-                {
-                    return new AutomationResult
-                    {
-                        Success = false,
-                        Error = joinResult.Error,
-                        TraceEntries = trace
-                    };
-                }
-            }
-            else
-            {
-                trace.Add(Info("Join-call step was skipped because no server/channel names were provided."));
+                trace.Add(Info($"Discord destination was provided as '{request.DiscordServerName ?? "unspecified"} / {request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId ?? "unspecified"}' but is intentionally ignored during start-stream."));
             }
 
-            if (request.StreamTarget.Kind is "browser" or "application")
-            {
-                var resolution = await ResolveTargetWindowAsync(request.StreamTarget, cancellationToken);
-                matchedTargetWindow = resolution.SelectedWindow;
-                trace.Add(Info($"Resolved stream target window '{matchedTargetWindow.MainWindowTitle}' from process '{matchedTargetWindow.ProcessName}' (PID {matchedTargetWindow.ProcessId})."));
-
-                if (resolution.CandidateCount > 1)
-                {
-                    trace.Add(Info($"Multiple candidate windows matched the hint; selected the highest-confidence match out of {resolution.CandidateCount} candidates."));
-                }
-            }
-            else
-            {
-                trace.Add(Info("Display target selected; window hint resolution was skipped."));
-            }
-
-            if (matchedTargetWindow is null)
-            {
-                return new AutomationResult
-                {
-                    Success = false,
-                    Error = "Display streaming is not implemented yet; provide an application or browser window hint.",
-                    TraceEntries = trace
-                };
-            }
-
-        if (!string.IsNullOrWhiteSpace(options.DiscordScreenShareKeybind))
-            {
             trace.Add(Info($"Using configured Discord screen share keybind '{options.DiscordScreenShareKeybind}'."));
 
             var keybindTraceLines = await RunDiscordScreenShareKeybindAsync(
-                matchedTargetWindow,
                 options.DiscordScreenShareKeybind,
                 options.DiscordScreenShareKeybindDelayMs,
                 cancellationToken);
@@ -274,27 +209,7 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
                 trace.Add(Info(line));
             }
 
-            trace.Add(Info("Discord screen share keybind sent. Verify that the registered Firefox game began streaming."));
-            }
-        else
-        {
-            var activeDiscordProcess = await WaitForDiscordWindowAsync(cancellationToken);
-            trace.Add(Info($"Preparing Discord share dialog with process {activeDiscordProcess.Id}."));
-
-            var shareTraceLines = await RunDiscordShareDialogStartAsync(
-                matchedTargetWindow,
-                request.StreamTarget.WindowTitleHint,
-                request.IncludeSystemAudio,
-                activeDiscordProcess.Id,
-                cancellationToken);
-
-            foreach (var line in shareTraceLines)
-            {
-                trace.Add(Info(line));
-            }
-
-            trace.Add(Info("Discord share-dialog automation attempted to start the stream."));
-        }
+            trace.Add(Info("Discord screen share keybind sent."));
 
             trace.Add(Info($"Requested Discord destination: {request.DiscordServerName ?? "unspecified"} / {request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId ?? "unspecified"}."));
             trace.Add(Info($"Requested window hint: {request.StreamTarget.WindowTitleHint ?? "none"}."));
@@ -304,8 +219,8 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             return new AutomationResult
             {
                 Success = true,
-                SelectedWindowTitle = matchedTargetWindow?.MainWindowTitle,
-                SelectedProcessName = matchedTargetWindow?.ProcessName,
+                SelectedWindowTitle = request.StreamTarget.WindowTitleHint,
+                SelectedProcessName = request.StreamTarget.ProcessNameHint,
                 TraceEntries = trace
             };
         }
@@ -316,8 +231,8 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             {
                 Success = false,
                 Error = ex.Message,
-                SelectedWindowTitle = matchedTargetWindow?.MainWindowTitle,
-                SelectedProcessName = matchedTargetWindow?.ProcessName,
+                SelectedWindowTitle = request.StreamTarget.WindowTitleHint,
+                SelectedProcessName = request.StreamTarget.ProcessNameHint,
                 TraceEntries = trace
             };
         }
@@ -436,24 +351,13 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
     }
 
     private static async Task<IReadOnlyList<string>> RunDiscordScreenShareKeybindAsync(
-        WindowCandidate matchedTargetWindow,
         string keybind,
         int delayBeforeKeybindMs,
         CancellationToken cancellationToken)
     {
         var traceLines = new List<string>();
-        var targetProcess = Process.GetProcessById(matchedTargetWindow.ProcessId);
-        targetProcess.Refresh();
-
-        if (targetProcess.MainWindowHandle == IntPtr.Zero)
-        {
-            throw new InvalidOperationException($"Target application window '{matchedTargetWindow.MainWindowTitle}' was not focusable.");
-        }
-
-        ActivateWindow(targetProcess.MainWindowHandle);
-        traceLines.Add($"Activated target window '{matchedTargetWindow.MainWindowTitle}'.");
-
         var stabilizedDelayMs = Math.Max(0, delayBeforeKeybindMs);
+        traceLines.Add("Start-stream will not change focus before sending the Discord screen share keybind.");
         traceLines.Add($"Waiting {stabilizedDelayMs}ms before sending the Discord screen share keybind.");
         await Task.Delay(stabilizedDelayMs, cancellationToken);
 
