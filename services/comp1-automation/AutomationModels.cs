@@ -51,4 +51,5 @@ public sealed class Comp1AutomationOptions
     public string? PreferredBrowserPath { get; init; }
     public string? DiscordExecutablePath { get; init; }
     public string? DiscordScreenShareKeybind { get; init; }
+    public int DiscordScreenShareKeybindDelayMs { get; init; } = 2500;
 }

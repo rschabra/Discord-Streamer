@@ -266,6 +266,7 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             var keybindTraceLines = await RunDiscordScreenShareKeybindAsync(
                 matchedTargetWindow,
                 options.DiscordScreenShareKeybind,
+                options.DiscordScreenShareKeybindDelayMs,
                 cancellationToken);
 
             foreach (var line in keybindTraceLines)
@@ -437,6 +438,7 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
     private static async Task<IReadOnlyList<string>> RunDiscordScreenShareKeybindAsync(
         WindowCandidate matchedTargetWindow,
         string keybind,
+        int delayBeforeKeybindMs,
         CancellationToken cancellationToken)
     {
         var traceLines = new List<string>();
@@ -451,7 +453,9 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         ActivateWindow(targetProcess.MainWindowHandle);
         traceLines.Add($"Activated target window '{matchedTargetWindow.MainWindowTitle}'.");
 
-        await Task.Delay(800, cancellationToken);
+        var stabilizedDelayMs = Math.Max(0, delayBeforeKeybindMs);
+        traceLines.Add($"Waiting {stabilizedDelayMs}ms before sending the Discord screen share keybind.");
+        await Task.Delay(stabilizedDelayMs, cancellationToken);
 
         var virtualKeys = ParseKeybindVirtualKeys(keybind);
         SendKeyChord(virtualKeys);
