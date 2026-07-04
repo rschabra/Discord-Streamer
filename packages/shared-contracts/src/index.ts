@@ -54,6 +54,7 @@ export interface ApplianceState extends ApplianceHealth {
   lastError?: string;
   selectedDiscordServer?: string;
   selectedDiscordChannel?: string;
+  selectedStreamWindowTitle?: string;
   lastTraceEntries: TraceEntry[];
 }
 

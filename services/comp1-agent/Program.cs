@@ -165,6 +165,7 @@ app.MapPost("/api/stream/start", async (HttpContext httpContext, StreamStartApiR
     stateStore.SetStreamActive(true);
     stateStore.SetSelectedDiscordServer(request.DiscordServerName);
     stateStore.SetSelectedDiscordChannel(request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId);
+    stateStore.SetSelectedStreamWindowTitle(result.SelectedWindowTitle);
     stateStore.ClearLastError();
 
     return Results.Ok(stateStore.ToStateResponse());
@@ -252,6 +253,7 @@ internal sealed class ApplianceStateStore
     private string? _lastError;
     private string? _selectedDiscordServer;
     private string? _selectedDiscordChannel;
+    private string? _selectedStreamWindowTitle;
     private bool _browserRunning;
     private bool _discordRunning;
     private bool _streamActive;
@@ -281,6 +283,7 @@ internal sealed class ApplianceStateStore
                 _lastError,
                 _selectedDiscordServer,
                 _selectedDiscordChannel,
+                _selectedStreamWindowTitle,
                 _traceEntries.TakeLast(30).ToArray());
         }
     }
@@ -338,6 +341,14 @@ internal sealed class ApplianceStateStore
         lock (_gate)
         {
             _selectedDiscordServer = server;
+        }
+    }
+
+    public void SetSelectedStreamWindowTitle(string? windowTitle)
+    {
+        lock (_gate)
+        {
+            _selectedStreamWindowTitle = windowTitle;
         }
     }
 
@@ -417,6 +428,7 @@ internal sealed record ApplianceStateResponse(
     string? LastError,
     string? SelectedDiscordServer,
     string? SelectedDiscordChannel,
+    string? SelectedStreamWindowTitle,
     IReadOnlyList<ApiTraceEntry> LastTraceEntries);
 
 internal sealed class Comp1Settings

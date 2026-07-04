@@ -41,6 +41,8 @@ public sealed class AutomationResult
 {
     public bool Success { get; init; }
     public string? Error { get; init; }
+    public string? SelectedWindowTitle { get; init; }
+    public string? SelectedProcessName { get; init; }
     public List<TraceEntry> TraceEntries { get; init; } = [];
 }
 

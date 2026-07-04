@@ -135,7 +135,7 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
 
         try
         {
-            var searchQuery = $"{request.ServerName} #{request.VoiceChannelName}";
+            var searchQuery = BuildDiscordQuickSwitchQuery(request.ServerName, request.VoiceChannelName);
             trace.Add(Info($"Using Discord quick switch search query '{searchQuery}'."));
 
             var discordProcess = await WaitForDiscordWindowAsync(cancellationToken);
@@ -228,7 +228,24 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             trace.Add(Info("Join-call step was skipped because no server/channel names were provided."));
         }
 
-        trace.Add(Info("Begin-stream steps are still scaffolded for selector tuning."));
+        WindowCandidate? matchedTargetWindow = null;
+        if (request.StreamTarget.Kind is "browser" or "application")
+        {
+            var resolution = await ResolveTargetWindowAsync(request.StreamTarget, cancellationToken);
+            matchedTargetWindow = resolution.SelectedWindow;
+            trace.Add(Info($"Resolved stream target window '{matchedTargetWindow.MainWindowTitle}' from process '{matchedTargetWindow.ProcessName}' (PID {matchedTargetWindow.ProcessId})."));
+
+            if (resolution.CandidateCount > 1)
+            {
+                trace.Add(Info($"Multiple candidate windows matched the hint; selected the highest-confidence match out of {resolution.CandidateCount} candidates."));
+            }
+        }
+        else
+        {
+            trace.Add(Info("Display target selected; window hint resolution was skipped."));
+        }
+
+        trace.Add(Info("Discord share-dialog automation is still pending; the stream target hint was validated and resolved."));
         trace.Add(Info($"Requested Discord destination: {request.DiscordServerName ?? "unspecified"} / {request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId ?? "unspecified"}."));
         trace.Add(Info($"Requested window hint: {request.StreamTarget.WindowTitleHint ?? "none"}."));
 
@@ -237,6 +254,8 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         return new AutomationResult
         {
             Success = true,
+            SelectedWindowTitle = matchedTargetWindow?.MainWindowTitle,
+            SelectedProcessName = matchedTargetWindow?.ProcessName,
             TraceEntries = trace
         };
     }
@@ -353,6 +372,92 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         }
     }
 
+    private static async Task<WindowResolutionResult> ResolveTargetWindowAsync(StreamTarget target, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(target.WindowTitleHint) && string.IsNullOrWhiteSpace(target.ProcessNameHint))
+        {
+            throw new InvalidOperationException("A window title hint or process name hint is required to resolve the stream target window.");
+        }
+
+        var timeoutAt = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < timeoutAt)
+        {
+            var candidates = FindWindowCandidates(target).ToArray();
+            if (candidates.Length > 0)
+            {
+                return new WindowResolutionResult(candidates[0], candidates.Length);
+            }
+
+            await Task.Delay(500, cancellationToken);
+        }
+
+        throw new InvalidOperationException($"No open window matched the requested hint '{target.WindowTitleHint ?? target.ProcessNameHint}'.");
+    }
+
+    private static IEnumerable<WindowCandidate> FindWindowCandidates(StreamTarget target)
+    {
+        var titleHint = target.WindowTitleHint?.Trim();
+        var processHint = target.ProcessNameHint?.Trim();
+
+        return Process.GetProcesses()
+            .Select(process =>
+            {
+                try
+                {
+                    process.Refresh();
+                    if (process.MainWindowHandle == IntPtr.Zero || string.IsNullOrWhiteSpace(process.MainWindowTitle))
+                    {
+                        return null;
+                    }
+
+                    return new WindowCandidate(
+                        process.Id,
+                        process.ProcessName,
+                        process.MainWindowTitle,
+                        ScoreWindowCandidate(process, process.MainWindowTitle, titleHint, processHint));
+                }
+                catch
+                {
+                    return null;
+                }
+            })
+            .Where(candidate => candidate is not null && candidate.Score > 0)
+            .OrderByDescending(candidate => candidate!.Score)
+            .ThenBy(candidate => candidate!.MainWindowTitle.Length)
+            .Cast<WindowCandidate>();
+    }
+
+    private static int ScoreWindowCandidate(Process process, string windowTitle, string? titleHint, string? processHint)
+    {
+        var score = 0;
+
+        if (!string.IsNullOrWhiteSpace(titleHint))
+        {
+            if (string.Equals(windowTitle, titleHint, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 100;
+            }
+            else if (windowTitle.Contains(titleHint, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 70;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(processHint))
+        {
+            if (string.Equals(process.ProcessName, processHint, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 60;
+            }
+            else if (process.ProcessName.Contains(processHint, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 30;
+            }
+        }
+
+        return score;
+    }
+
     private static string EscapeSendKeysText(string text)
     {
         var builder = new StringBuilder();
@@ -377,4 +482,13 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
 
         return builder.ToString();
     }
+
+    private static string BuildDiscordQuickSwitchQuery(string serverName, string voiceChannelName)
+    {
+        var compactChannelName = new string(voiceChannelName.Where(character => !char.IsWhiteSpace(character)).ToArray());
+        return $"{serverName} !{compactChannelName}";
+    }
+
+    private sealed record WindowCandidate(int ProcessId, string ProcessName, string MainWindowTitle, int Score);
+    private sealed record WindowResolutionResult(WindowCandidate SelectedWindow, int CandidateCount);
 }
