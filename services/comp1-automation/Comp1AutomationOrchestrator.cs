@@ -924,9 +924,36 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         }
 
         var sent = SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT>());
-        if (sent != inputs.Count)
+        if (sent == inputs.Count)
         {
-            throw new InvalidOperationException($"SendInput injected {sent} of {inputs.Count} keyboard events.");
+            return;
+        }
+
+        var sendInputError = Marshal.GetLastWin32Error();
+
+        try
+        {
+            SendKeyChordWithKeybdEvent(virtualKeys);
+            return;
+        }
+        catch (Exception fallbackException)
+        {
+            throw new InvalidOperationException(
+                $"SendInput injected {sent} of {inputs.Count} keyboard events (Win32 error {sendInputError}). " +
+                $"Fallback keybd_event injection also failed: {fallbackException.Message}");
+        }
+    }
+
+    private static void SendKeyChordWithKeybdEvent(IReadOnlyList<ushort> virtualKeys)
+    {
+        foreach (var key in virtualKeys)
+        {
+            keybd_event((byte)key, 0, 0, UIntPtr.Zero);
+        }
+
+        for (var index = virtualKeys.Count - 1; index >= 0; index--)
+        {
+            keybd_event((byte)virtualKeys[index], 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         }
     }
 
@@ -1033,6 +1060,9 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
