@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Discord Streaming Appliance</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="card">
+        <h1>Discord Streaming Appliance</h1>
+        <p class="muted">Control `COMP1` from `COMP2` over the local network.</p>
+      </section>
+
+      <section class="card">
+        <h2>Connection</h2>
+        <label>COMP1 Base URL <input id="baseUrl" value="http://127.0.0.1:5000" /></label>
+        <label>Username <input id="username" value="operator" /></label>
+        <label>Password <input id="password" type="password" /></label>
+        <button id="connectButton">Connect</button>
+      </section>
+
+      <section class="card">
+        <h2>Streaming Workflow</h2>
+        <label>Browser URL <input id="browserUrl" placeholder="https://example.com/video" /></label>
+        <label>Discord Channel Name <input id="channelDisplayName" placeholder="Friends Voice" /></label>
+        <label>Window Title Hint <input id="windowTitleHint" placeholder="YouTube" /></label>
+        <div class="actions">
+          <button id="openBrowserButton">Open Browser</button>
+          <button id="launchDiscordButton">Launch Discord</button>
+          <button id="startStreamButton">Start Stream</button>
+          <button id="stopStreamButton">Stop Stream</button>
+          <button id="developerModeButton">Open Developer Mode</button>
+          <button id="refreshStateButton">Refresh State</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Status</h2>
+        <pre id="statusOutput">Not connected.</pre>
+      </section>
+    </main>
+
+    <script type="module" src="../../dist/renderer/app.js"></script>
+  </body>
+</html>

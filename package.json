@@ -1,0 +1,15 @@
+{
+  "name": "discord-streamer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Discord streaming appliance monorepo",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:desktop": "npm --workspace apps/comp2-desktop run dev",
+    "build:desktop": "npm --workspace apps/comp2-desktop run build",
+    "typecheck:contracts": "npm --workspace packages/shared-contracts run build"
+  }
+}

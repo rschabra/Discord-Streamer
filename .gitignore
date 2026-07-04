@@ -1,0 +1,23 @@
+# Node / Electron
+node_modules/
+dist/
+build/
+out/
+.turbo/
+
+# .NET
+bin/
+obj/
+.vs/
+
+# Logs and local state
+*.log
+*.local.json
+*.user
+*.suo
+*.db
+*.sqlite
+
+# OS / editor
+.DS_Store
+Thumbs.db
