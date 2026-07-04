@@ -245,7 +245,32 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             trace.Add(Info("Display target selected; window hint resolution was skipped."));
         }
 
-        trace.Add(Info("Discord share-dialog automation is still pending; the stream target hint was validated and resolved."));
+        if (matchedTargetWindow is null)
+        {
+            return new AutomationResult
+            {
+                Success = false,
+                Error = "Display streaming is not implemented yet; provide an application or browser window hint.",
+                TraceEntries = trace
+            };
+        }
+
+        var activeDiscordProcess = await WaitForDiscordWindowAsync(cancellationToken);
+        trace.Add(Info($"Preparing Discord share dialog with process {activeDiscordProcess.Id}."));
+
+        var shareTraceLines = await RunDiscordShareDialogStartAsync(
+            matchedTargetWindow,
+            request.StreamTarget.WindowTitleHint,
+            request.IncludeSystemAudio,
+            activeDiscordProcess.Id,
+            cancellationToken);
+
+        foreach (var line in shareTraceLines)
+        {
+            trace.Add(Info(line));
+        }
+
+        trace.Add(Info("Discord share-dialog automation attempted to start the stream."));
         trace.Add(Info($"Requested Discord destination: {request.DiscordServerName ?? "unspecified"} / {request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId ?? "unspecified"}."));
         trace.Add(Info($"Requested window hint: {request.StreamTarget.WindowTitleHint ?? "none"}."));
 
@@ -372,6 +397,222 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         }
     }
 
+    private static async Task<IReadOnlyList<string>> RunDiscordShareDialogStartAsync(
+        WindowCandidate matchedTargetWindow,
+        string? windowTitleHint,
+        bool includeSystemAudio,
+        int discordProcessId,
+        CancellationToken cancellationToken)
+    {
+        var searchFragments = BuildWindowSearchFragments(matchedTargetWindow.MainWindowTitle, windowTitleHint);
+        var searchFragmentsLiteral = ToPowerShellArrayLiteral(searchFragments);
+        var includeSystemAudioLiteral = includeSystemAudio ? "$true" : "$false";
+
+        var script = $$"""
+            Add-Type -AssemblyName UIAutomationClient
+            Add-Type -AssemblyName UIAutomationTypes
+            Add-Type @"
+            using System;
+            using System.Runtime.InteropServices;
+            public static class CursorAutomation {
+                [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+                [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+                public const uint LeftDown = 0x0002;
+                public const uint LeftUp = 0x0004;
+            }
+            "@
+
+            function Get-DiscordRoot($processId) {
+                $process = Get-Process -Id $processId -ErrorAction Stop
+                $process.Refresh()
+                if ($process.MainWindowHandle -eq 0) { throw "Discord main window handle is not available." }
+                return [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+            }
+
+            function Get-VisibleDescendants($root) {
+                $elements = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+                foreach ($element in $elements) {
+                    try {
+                        $rect = $element.Current.BoundingRectangle
+                        if ($rect.Width -gt 0 -and $rect.Height -gt 0) { $element }
+                    } catch {}
+                }
+            }
+
+            function Matches-ControlType($element, [string[]]$controlTypes) {
+                if (-not $controlTypes -or $controlTypes.Count -eq 0) { return $true }
+                try {
+                    $typeName = $element.Current.ControlType.ProgrammaticName.ToLowerInvariant()
+                    foreach ($controlType in $controlTypes) {
+                        if ($typeName.Contains($controlType.ToLowerInvariant())) { return $true }
+                    }
+                } catch {}
+                return $false
+            }
+
+            function Find-ElementByPreferredNames($root, [string[]]$exactNames, [string[]]$containsNames, [string[]]$controlTypes, [string[]]$excludeFragments) {
+                $matches = @()
+                foreach ($element in Get-VisibleDescendants $root) {
+                    try { $name = $element.Current.Name } catch { continue }
+                    if ([string]::IsNullOrWhiteSpace($name)) { continue }
+                    if (-not (Matches-ControlType $element $controlTypes)) { continue }
+
+                    $excluded = $false
+                    foreach ($excludeFragment in $excludeFragments) {
+                        if (-not [string]::IsNullOrWhiteSpace($excludeFragment) -and $name.IndexOf($excludeFragment, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                            $excluded = $true
+                            break
+                        }
+                    }
+                    if ($excluded) { continue }
+
+                    foreach ($exactName in $exactNames) {
+                        if ($name.Equals($exactName, [StringComparison]::OrdinalIgnoreCase)) {
+                            return $element
+                        }
+                    }
+
+                    foreach ($fragment in $containsNames) {
+                        if (-not [string]::IsNullOrWhiteSpace($fragment) -and $name.IndexOf($fragment, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                            $matches += [pscustomobject]@{ Element = $element; Name = $name; Length = $name.Length; Fragment = $fragment }
+                            break
+                        }
+                    }
+                }
+
+                return $matches | Sort-Object Length | Select-Object -First 1 -ExpandProperty Element
+            }
+
+            function Wait-ForElementByPreferredNames($processId, [string[]]$exactNames, [string[]]$containsNames, [string[]]$controlTypes, [string[]]$excludeFragments, [int]$timeoutMs) {
+                $start = Get-Date
+                while (((Get-Date) - $start).TotalMilliseconds -lt $timeoutMs) {
+                    $root = Get-DiscordRoot $processId
+                    $element = Find-ElementByPreferredNames $root $exactNames $containsNames $controlTypes $excludeFragments
+                    if ($element) { return $element }
+                    Start-Sleep -Milliseconds 300
+                }
+                throw "Timed out waiting for a Discord UI element. Names: $($exactNames -join ', ') / $($containsNames -join ', ')"
+            }
+
+            function Invoke-AutomationElement($element, $description) {
+                if ($null -eq $element) { throw "Element not found: $description" }
+
+                try {
+                    $invoke = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                    if ($invoke) {
+                        $invoke.Invoke()
+                        Write-Output "Invoked $description"
+                        return
+                    }
+                } catch {}
+
+                try {
+                    $selection = $element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                    if ($selection) {
+                        $selection.Select()
+                        Write-Output "Selected $description"
+                        return
+                    }
+                } catch {}
+
+                try {
+                    $toggle = $element.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+                    if ($toggle) {
+                        $toggle.Toggle()
+                        Write-Output "Toggled $description"
+                        return
+                    }
+                } catch {}
+
+                $rect = $element.Current.BoundingRectangle
+                if ($rect.Width -le 0 -or $rect.Height -le 0) { throw "No actionable bounds for $description" }
+
+                $x = [int]($rect.X + ($rect.Width / 2))
+                $y = [int]($rect.Y + ($rect.Height / 2))
+                [CursorAutomation]::SetCursorPos($x, $y) | Out-Null
+                Start-Sleep -Milliseconds 100
+                [CursorAutomation]::mouse_event([CursorAutomation]::LeftDown, 0, 0, 0, [UIntPtr]::Zero)
+                Start-Sleep -Milliseconds 50
+                [CursorAutomation]::mouse_event([CursorAutomation]::LeftUp, 0, 0, 0, [UIntPtr]::Zero)
+                Write-Output "Clicked $description at ($x,$y)"
+            }
+
+            $discordProcessId = {{discordProcessId}}
+            $targetFragments = {{searchFragmentsLiteral}}
+            $includeSystemAudio = {{includeSystemAudioLiteral}}
+
+            $wshell = New-Object -ComObject WScript.Shell
+            if (-not $wshell.AppActivate($discordProcessId)) { throw "Discord process window not found or not focusable." }
+            Start-Sleep -Milliseconds 1200
+            Write-Output "Discord window activated."
+
+            $shareButton = Wait-ForElementByPreferredNames $discordProcessId @('Share Your Screen') @('Share Your Screen', 'Screen') @('button') @() 10000
+            Invoke-AutomationElement $shareButton 'share button'
+            Start-Sleep -Milliseconds 1200
+
+            $applicationsTab = Find-ElementByPreferredNames (Get-DiscordRoot $discordProcessId) @('Applications') @('Applications') @('tabitem', 'button') @()
+            if ($applicationsTab) {
+                Invoke-AutomationElement $applicationsTab 'applications tab'
+                Start-Sleep -Milliseconds 700
+            } else {
+                Write-Output "Applications tab not found; continuing with the current share view."
+            }
+
+            $targetElement = Wait-ForElementByPreferredNames $discordProcessId @() $targetFragments @('listitem', 'button', 'pane', 'group', 'text', 'image') @('Share Your Screen', 'Applications', 'Go Live') 10000
+            Invoke-AutomationElement $targetElement 'target application tile'
+            Start-Sleep -Milliseconds 700
+
+            if ($includeSystemAudio) {
+                $audioElement = Find-ElementByPreferredNames (Get-DiscordRoot $discordProcessId) @() @('Share Audio', 'Also share application audio', 'Sound') @('checkbox', 'button') @()
+                if ($audioElement) {
+                    try {
+                        $togglePattern = $audioElement.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+                        if ($togglePattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off) {
+                            $togglePattern.Toggle()
+                            Write-Output "Enabled application audio."
+                        } else {
+                            Write-Output "Application audio already enabled."
+                        }
+                    } catch {
+                        Write-Output "Audio toggle was found but did not expose TogglePattern; leaving it unchanged."
+                    }
+                } else {
+                    Write-Output "Application audio toggle was not found."
+                }
+                Start-Sleep -Milliseconds 300
+            }
+
+            $goLiveButton = Wait-ForElementByPreferredNames $discordProcessId @('Go Live') @('Go Live', 'Share') @('button') @('Share Your Screen') 10000
+            Invoke-AutomationElement $goLiveButton 'go live button'
+            Start-Sleep -Milliseconds 1200
+            Write-Output "Go Live command sent."
+            """;
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script.Replace("\"", "\\\"")}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true
+        }) ?? throw new InvalidOperationException("Failed to start Discord share automation process.");
+
+        await process.WaitForExitAsync(cancellationToken);
+
+        var stdOut = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stdErr = await process.StandardError.ReadToEndAsync(cancellationToken);
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(stdErr)
+                ? $"Share dialog automation failed with exit code {process.ExitCode}. {stdOut}".Trim()
+                : stdErr.Trim());
+        }
+
+        return stdOut.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
     private static async Task<WindowResolutionResult> ResolveTargetWindowAsync(StreamTarget target, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(target.WindowTitleHint) && string.IsNullOrWhiteSpace(target.ProcessNameHint))
@@ -487,6 +728,51 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
     {
         var compactChannelName = new string(voiceChannelName.Where(character => !char.IsWhiteSpace(character)).ToArray());
         return $"{serverName} !{compactChannelName}";
+    }
+
+    private static string[] BuildWindowSearchFragments(string resolvedWindowTitle, string? windowTitleHint)
+    {
+        var fragments = new List<string>();
+
+        AddFragment(windowTitleHint);
+        AddFragment(resolvedWindowTitle);
+
+        foreach (var separator in new[] { " - ", " | ", " — ", " – ", ":" })
+        {
+            var index = resolvedWindowTitle.IndexOf(separator, StringComparison.Ordinal);
+            if (index > 3)
+            {
+                AddFragment(resolvedWindowTitle[..index]);
+            }
+        }
+
+        return fragments
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(fragment => fragment.Length)
+            .ToArray();
+
+        void AddFragment(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            var normalized = value.Trim();
+            if (normalized.Length >= 3)
+            {
+                fragments.Add(normalized);
+            }
+        }
+    }
+
+    private static string ToPowerShellArrayLiteral(IEnumerable<string> values)
+    {
+        var items = values
+            .Select(value => $"'{value.Replace("'", "''")}'")
+            .ToArray();
+
+        return $"@({string.Join(", ", items)})";
     }
 
     private sealed record WindowCandidate(int ProcessId, string ProcessName, string MainWindowTitle, int Score);
