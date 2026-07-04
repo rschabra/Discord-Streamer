@@ -67,6 +67,25 @@ Behavior:
 
 Starts or focuses Discord on `COMP1`.
 
+### `POST /api/discord/join-voice`
+
+Request:
+
+```json
+{
+  "serverName": "My Test Server",
+  "voiceChannelName": "General"
+}
+```
+
+Behavior:
+
+- launches or focuses Discord if needed
+- opens Discord quick switch
+- searches for the requested server/channel pair
+- attempts to activate the highlighted voice-channel result
+- records trace entries and updates the selected Discord destination
+
 ### `POST /api/stream/start`
 
 Request:
@@ -76,6 +95,8 @@ Request:
   "browserUrl": "https://example.com/video",
   "discordGuildId": "optional-guild-id",
   "discordChannelId": "optional-channel-id",
+  "discordServerName": "My Test Server",
+  "discordVoiceChannelName": "General",
   "channelDisplayName": "Friends Voice",
   "streamTarget": {
     "kind": "browser",

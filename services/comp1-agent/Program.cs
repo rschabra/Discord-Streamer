@@ -96,6 +96,36 @@ app.MapPost("/api/apps/discord/launch", async (HttpContext httpContext, TokenSto
     return Results.Ok(stateStore.ToStateResponse());
 });
 
+app.MapPost("/api/discord/join-voice", async (HttpContext httpContext, JoinVoiceChannelApiRequest request, TokenStore tokenStore, ApplianceStateStore stateStore, IComp1Automation automation, CancellationToken cancellationToken) =>
+{
+    var authResult = TryAuthorize(httpContext, tokenStore);
+    if (authResult is not null)
+    {
+        return authResult;
+    }
+
+    var result = await automation.JoinVoiceChannelAsync(new JoinVoiceChannelRequest
+    {
+        ServerName = request.ServerName,
+        VoiceChannelName = request.VoiceChannelName
+    }, cancellationToken);
+
+    stateStore.ApplyAutomationResult(result);
+
+    if (!result.Success)
+    {
+        stateStore.SetLastError(result.Error);
+        return Results.BadRequest(new { error = result.Error, trace = result.TraceEntries });
+    }
+
+    stateStore.SetDiscordRunning(true);
+    stateStore.SetSelectedDiscordServer(request.ServerName);
+    stateStore.SetSelectedDiscordChannel(request.VoiceChannelName);
+    stateStore.ClearLastError();
+
+    return Results.Ok(stateStore.ToStateResponse());
+});
+
 app.MapPost("/api/stream/start", async (HttpContext httpContext, StreamStartApiRequest request, TokenStore tokenStore, ApplianceStateStore stateStore, IComp1Automation automation, CancellationToken cancellationToken) =>
 {
     var authResult = TryAuthorize(httpContext, tokenStore);
@@ -109,6 +139,8 @@ app.MapPost("/api/stream/start", async (HttpContext httpContext, StreamStartApiR
         BrowserUrl = request.BrowserUrl,
         DiscordGuildId = request.DiscordGuildId,
         DiscordChannelId = request.DiscordChannelId,
+        DiscordServerName = request.DiscordServerName,
+        DiscordVoiceChannelName = request.DiscordVoiceChannelName,
         ChannelDisplayName = request.ChannelDisplayName,
         StreamTarget = new StreamTarget
         {
@@ -131,7 +163,8 @@ app.MapPost("/api/stream/start", async (HttpContext httpContext, StreamStartApiR
     stateStore.SetBrowserRunning(!string.IsNullOrWhiteSpace(request.BrowserUrl));
     stateStore.SetCurrentUrl(request.BrowserUrl);
     stateStore.SetStreamActive(true);
-    stateStore.SetSelectedDiscordChannel(request.ChannelDisplayName ?? request.DiscordChannelId);
+    stateStore.SetSelectedDiscordServer(request.DiscordServerName);
+    stateStore.SetSelectedDiscordChannel(request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId);
     stateStore.ClearLastError();
 
     return Results.Ok(stateStore.ToStateResponse());
@@ -198,9 +231,17 @@ internal sealed class StreamStartApiRequest
     public string? BrowserUrl { get; init; }
     public string? DiscordGuildId { get; init; }
     public string? DiscordChannelId { get; init; }
+    public string? DiscordServerName { get; init; }
+    public string? DiscordVoiceChannelName { get; init; }
     public string? ChannelDisplayName { get; init; }
     public required StreamTargetApiModel StreamTarget { get; init; }
     public bool IncludeSystemAudio { get; init; }
+}
+
+internal sealed class JoinVoiceChannelApiRequest
+{
+    public required string ServerName { get; init; }
+    public required string VoiceChannelName { get; init; }
 }
 
 internal sealed class ApplianceStateStore
@@ -209,6 +250,7 @@ internal sealed class ApplianceStateStore
     private readonly List<ApiTraceEntry> _traceEntries = [];
     private string? _currentUrl;
     private string? _lastError;
+    private string? _selectedDiscordServer;
     private string? _selectedDiscordChannel;
     private bool _browserRunning;
     private bool _discordRunning;
@@ -237,6 +279,7 @@ internal sealed class ApplianceStateStore
                 _streamActive,
                 _currentUrl,
                 _lastError,
+                _selectedDiscordServer,
                 _selectedDiscordChannel,
                 _traceEntries.TakeLast(30).ToArray());
         }
@@ -287,6 +330,14 @@ internal sealed class ApplianceStateStore
         lock (_gate)
         {
             _selectedDiscordChannel = channel;
+        }
+    }
+
+    public void SetSelectedDiscordServer(string? server)
+    {
+        lock (_gate)
+        {
+            _selectedDiscordServer = server;
         }
     }
 
@@ -364,6 +415,7 @@ internal sealed record ApplianceStateResponse(
     bool StreamActive,
     string? CurrentUrl,
     string? LastError,
+    string? SelectedDiscordServer,
     string? SelectedDiscordChannel,
     IReadOnlyList<ApiTraceEntry> LastTraceEntries);
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type {
   BrowserOpenRequest,
+  JoinVoiceChannelRequest,
   LoginRequest,
   StreamStartRequest
 } from "@discord-streamer/shared-contracts";
@@ -69,6 +70,11 @@ ipcMain.handle("browser:open", async (_event, request: BrowserOpenRequest) => {
 ipcMain.handle("discord:launch", async () => {
   assertClient();
   return client!.launchDiscord();
+});
+
+ipcMain.handle("discord:joinVoice", async (_event, request: JoinVoiceChannelRequest) => {
+  assertClient();
+  return client!.joinVoiceChannel(request);
 });
 
 ipcMain.handle("stream:start", async (_event, request: StreamStartRequest) => {
