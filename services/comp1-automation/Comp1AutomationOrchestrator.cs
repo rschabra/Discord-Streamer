@@ -994,10 +994,11 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
     {
         var sendString = ConvertToAutoHotkeySendString(keybind);
         return $$"""
-            #Requires AutoHotkey v2.0
-            SendMode "Event"
-            SetKeyDelay 50, 50
-            Send "{{sendString}}"
+            #NoTrayIcon
+            SendMode Event
+            SetKeyDelay, 50, 50
+            Send, {{sendString}}
+            ExitApp
             """;
     }
 
