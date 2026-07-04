@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace DiscordStreamer.Comp1.Automation;
@@ -438,45 +439,26 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         string keybind,
         CancellationToken cancellationToken)
     {
-        var sendKeysHotkey = ConvertToSendKeysHotkey(keybind);
-        var escapedHotkey = sendKeysHotkey.Replace("'", "''");
-        var script = $$"""
-            $wshell = New-Object -ComObject WScript.Shell
+        var traceLines = new List<string>();
+        var targetProcess = Process.GetProcessById(matchedTargetWindow.ProcessId);
+        targetProcess.Refresh();
 
-            if (-not $wshell.AppActivate({{matchedTargetWindow.ProcessId}})) {
-                throw "Target application window '{{matchedTargetWindow.MainWindowTitle}}' was not focusable."
-            }
-            Start-Sleep -Milliseconds 800
-            Write-Output "Activated target window '{{matchedTargetWindow.MainWindowTitle}}'."
-
-            $wshell.SendKeys('{{escapedHotkey}}')
-            Start-Sleep -Milliseconds 1500
-            Write-Output "Sent Discord screen share keybind '{{keybind}}'."
-            """;
-
-        using var process = Process.Start(new ProcessStartInfo
+        if (targetProcess.MainWindowHandle == IntPtr.Zero)
         {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script.Replace("\"", "\\\"")}\"",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardError = true,
-            RedirectStandardOutput = true
-        }) ?? throw new InvalidOperationException("Failed to start Discord keybind automation process.");
-
-        await process.WaitForExitAsync(cancellationToken);
-
-        var stdOut = await process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stdErr = await process.StandardError.ReadToEndAsync(cancellationToken);
-
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException(string.IsNullOrWhiteSpace(stdErr)
-                ? $"Screen share keybind automation failed with exit code {process.ExitCode}. {stdOut}".Trim()
-                : stdErr.Trim());
+            throw new InvalidOperationException($"Target application window '{matchedTargetWindow.MainWindowTitle}' was not focusable.");
         }
 
-        return stdOut.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        ActivateWindow(targetProcess.MainWindowHandle);
+        traceLines.Add($"Activated target window '{matchedTargetWindow.MainWindowTitle}'.");
+
+        await Task.Delay(800, cancellationToken);
+
+        var virtualKeys = ParseKeybindVirtualKeys(keybind);
+        SendKeyChord(virtualKeys);
+        traceLines.Add($"Injected Discord screen share keybind '{keybind}' with SendInput.");
+
+        await Task.Delay(1500, cancellationToken);
+        return traceLines;
     }
 
     private static async Task<IReadOnlyList<string>> RunDiscordShareDialogStartAsync(
@@ -827,7 +809,7 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         return $"{serverName} !{compactChannelName}";
     }
 
-    private static string ConvertToSendKeysHotkey(string keybind)
+    private static IReadOnlyList<ushort> ParseKeybindVirtualKeys(string keybind)
     {
         var tokens = keybind
             .Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -838,22 +820,22 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             throw new InvalidOperationException("DiscordScreenShareKeybind was empty.");
         }
 
-        var builder = new StringBuilder();
+        var virtualKeys = new List<ushort>();
         string? primaryKeyToken = null;
 
         foreach (var token in tokens)
         {
             if (token.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) || token.Equals("Control", StringComparison.OrdinalIgnoreCase))
             {
-                builder.Append('^');
+                virtualKeys.Add(VK_CONTROL);
             }
             else if (token.Equals("Alt", StringComparison.OrdinalIgnoreCase))
             {
-                builder.Append('%');
+                virtualKeys.Add(VK_MENU);
             }
             else if (token.Equals("Shift", StringComparison.OrdinalIgnoreCase))
             {
-                builder.Append('+');
+                virtualKeys.Add(VK_SHIFT);
             }
             else
             {
@@ -866,31 +848,103 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             throw new InvalidOperationException($"DiscordScreenShareKeybind '{keybind}' did not include a non-modifier key.");
         }
 
-        builder.Append(ConvertPrimaryKeyToken(primaryKeyToken));
-        return builder.ToString();
+        virtualKeys.Add(ConvertPrimaryKeyToken(primaryKeyToken));
+        return virtualKeys;
     }
 
-    private static string ConvertPrimaryKeyToken(string token)
+    private static ushort ConvertPrimaryKeyToken(string token)
     {
         if (token.Length == 1)
         {
-            return EscapeSendKeysText(token);
+            var character = char.ToUpperInvariant(token[0]);
+            if (character is >= 'A' and <= 'Z')
+            {
+                return (ushort)character;
+            }
+
+            if (character is >= '0' and <= '9')
+            {
+                return (ushort)character;
+            }
         }
 
         return token.ToUpperInvariant() switch
         {
-            "SPACE" => " ",
-            "TAB" => "{TAB}",
-            "ENTER" => "{ENTER}",
-            "ESC" or "ESCAPE" => "{ESC}",
-            "UP" => "{UP}",
-            "DOWN" => "{DOWN}",
-            "LEFT" => "{LEFT}",
-            "RIGHT" => "{RIGHT}",
-            _ when token.StartsWith("F", StringComparison.OrdinalIgnoreCase) => $"{{{token.ToUpperInvariant()}}}",
+            "SPACE" => VK_SPACE,
+            "TAB" => VK_TAB,
+            "ENTER" => VK_RETURN,
+            "ESC" or "ESCAPE" => VK_ESCAPE,
+            "UP" => VK_UP,
+            "DOWN" => VK_DOWN,
+            "LEFT" => VK_LEFT,
+            "RIGHT" => VK_RIGHT,
+            _ when TryParseFunctionKey(token, out var functionKey) => functionKey,
             _ => throw new InvalidOperationException($"DiscordScreenShareKeybind token '{token}' is not supported yet.")
         };
     }
+
+    private static bool TryParseFunctionKey(string token, out ushort keyCode)
+    {
+        keyCode = 0;
+        if (!token.StartsWith("F", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!int.TryParse(token[1..], out var keyNumber) || keyNumber is < 1 or > 24)
+        {
+            return false;
+        }
+
+        keyCode = (ushort)(0x70 + keyNumber - 1);
+        return true;
+    }
+
+    private static void ActivateWindow(IntPtr windowHandle)
+    {
+        ShowWindow(windowHandle, SW_RESTORE);
+        if (!SetForegroundWindow(windowHandle))
+        {
+            throw new InvalidOperationException("Failed to bring the target window to the foreground.");
+        }
+    }
+
+    private static void SendKeyChord(IReadOnlyList<ushort> virtualKeys)
+    {
+        var inputs = new List<INPUT>();
+
+        foreach (var key in virtualKeys)
+        {
+            inputs.Add(CreateKeyboardInput(key, 0));
+        }
+
+        for (var index = virtualKeys.Count - 1; index >= 0; index--)
+        {
+            inputs.Add(CreateKeyboardInput(virtualKeys[index], KEYEVENTF_KEYUP));
+        }
+
+        var sent = SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT>());
+        if (sent != inputs.Count)
+        {
+            throw new InvalidOperationException($"SendInput injected {sent} of {inputs.Count} keyboard events.");
+        }
+    }
+
+    private static INPUT CreateKeyboardInput(ushort virtualKey, uint flags) => new()
+    {
+        type = INPUT_KEYBOARD,
+        Anonymous = new INPUTUNION
+        {
+            ki = new KEYBDINPUT
+            {
+                wVk = virtualKey,
+                wScan = 0,
+                dwFlags = flags,
+                dwTime = 0,
+                dwExtraInfo = IntPtr.Zero
+            }
+        }
+    };
 
     private static string[] BuildWindowSearchFragments(string resolvedWindowTitle, string? windowTitleHint)
     {
@@ -936,6 +990,57 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
 
         return $"@({string.Join(", ", items)})";
     }
+
+    private const ushort VK_SHIFT = 0x10;
+    private const ushort VK_CONTROL = 0x11;
+    private const ushort VK_MENU = 0x12;
+    private const ushort VK_RETURN = 0x0D;
+    private const ushort VK_SPACE = 0x20;
+    private const ushort VK_TAB = 0x09;
+    private const ushort VK_ESCAPE = 0x1B;
+    private const ushort VK_LEFT = 0x25;
+    private const ushort VK_UP = 0x26;
+    private const ushort VK_RIGHT = 0x27;
+    private const ushort VK_DOWN = 0x28;
+
+    private const uint INPUT_KEYBOARD = 1;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const int SW_RESTORE = 9;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public INPUTUNION Anonymous;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct INPUTUNION
+    {
+        [FieldOffset(0)]
+        public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint dwTime;
+        public IntPtr dwExtraInfo;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     private sealed record WindowCandidate(int ProcessId, string ProcessName, string MainWindowTitle, int Score);
     private sealed record WindowResolutionResult(WindowCandidate SelectedWindow, int CandidateCount);
