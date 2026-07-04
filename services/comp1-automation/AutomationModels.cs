@@ -17,9 +17,17 @@ public sealed class StreamStartRequest
     public string? BrowserUrl { get; init; }
     public string? DiscordGuildId { get; init; }
     public string? DiscordChannelId { get; init; }
+    public string? DiscordServerName { get; init; }
+    public string? DiscordVoiceChannelName { get; init; }
     public string? ChannelDisplayName { get; init; }
     public required StreamTarget StreamTarget { get; init; }
     public bool IncludeSystemAudio { get; init; }
+}
+
+public sealed class JoinVoiceChannelRequest
+{
+    public required string ServerName { get; init; }
+    public required string VoiceChannelName { get; init; }
 }
 
 public sealed class TraceEntry

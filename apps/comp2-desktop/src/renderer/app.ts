@@ -1,5 +1,6 @@
 import type {
   BrowserOpenRequest,
+  JoinVoiceChannelRequest,
   StreamStartRequest
 } from "@discord-streamer/shared-contracts";
 
@@ -9,6 +10,7 @@ type Comp2Api = {
   getState(): Promise<unknown>;
   openBrowser(request: BrowserOpenRequest): Promise<unknown>;
   launchDiscord(): Promise<unknown>;
+  joinVoiceChannel(request: JoinVoiceChannelRequest): Promise<unknown>;
   startStream(request: StreamStartRequest): Promise<unknown>;
   stopStream(): Promise<unknown>;
   launchDeveloperMode(): Promise<unknown>;
@@ -25,7 +27,8 @@ const baseUrlInput = document.querySelector<HTMLInputElement>("#baseUrl")!;
 const usernameInput = document.querySelector<HTMLInputElement>("#username")!;
 const passwordInput = document.querySelector<HTMLInputElement>("#password")!;
 const browserUrlInput = document.querySelector<HTMLInputElement>("#browserUrl")!;
-const channelDisplayNameInput = document.querySelector<HTMLInputElement>("#channelDisplayName")!;
+const discordServerNameInput = document.querySelector<HTMLInputElement>("#discordServerName")!;
+const voiceChannelNameInput = document.querySelector<HTMLInputElement>("#voiceChannelName")!;
 const windowTitleHintInput = document.querySelector<HTMLInputElement>("#windowTitleHint")!;
 
 document.querySelector<HTMLButtonElement>("#connectButton")!.addEventListener("click", async () => {
@@ -53,11 +56,22 @@ document.querySelector<HTMLButtonElement>("#launchDiscordButton")!.addEventListe
   });
 });
 
+document.querySelector<HTMLButtonElement>("#joinVoiceButton")!.addEventListener("click", async () => {
+  await run(async () => {
+    print(await getApi().joinVoiceChannel({
+      serverName: discordServerNameInput.value,
+      voiceChannelName: voiceChannelNameInput.value
+    }));
+  });
+});
+
 document.querySelector<HTMLButtonElement>("#startStreamButton")!.addEventListener("click", async () => {
   await run(async () => {
     const request: StreamStartRequest = {
       browserUrl: browserUrlInput.value || undefined,
-      channelDisplayName: channelDisplayNameInput.value || undefined,
+      discordServerName: discordServerNameInput.value || undefined,
+      discordVoiceChannelName: voiceChannelNameInput.value || undefined,
+      channelDisplayName: voiceChannelNameInput.value || undefined,
       includeSystemAudio: true,
       streamTarget: {
         kind: "browser",

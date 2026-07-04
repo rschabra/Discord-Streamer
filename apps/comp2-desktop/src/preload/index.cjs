@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("comp2Api", {
   getState: () => ipcRenderer.invoke("state:full"),
   openBrowser: (request) => ipcRenderer.invoke("browser:open", request),
   launchDiscord: () => ipcRenderer.invoke("discord:launch"),
+  joinVoiceChannel: (request) => ipcRenderer.invoke("discord:joinVoice", request),
   startStream: (request) => ipcRenderer.invoke("stream:start", request),
   stopStream: () => ipcRenderer.invoke("stream:stop"),
   launchDeveloperMode: () => ipcRenderer.invoke("developer-mode:launch")

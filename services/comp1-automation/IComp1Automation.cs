@@ -4,6 +4,7 @@ public interface IComp1Automation
 {
     Task<AutomationResult> LaunchDiscordAsync(CancellationToken cancellationToken);
     Task<AutomationResult> OpenBrowserAsync(BrowserOpenRequest request, CancellationToken cancellationToken);
+    Task<AutomationResult> JoinVoiceChannelAsync(JoinVoiceChannelRequest request, CancellationToken cancellationToken);
     Task<AutomationResult> StartStreamWorkflowAsync(StreamStartRequest request, CancellationToken cancellationToken);
     Task<AutomationResult> StopStreamAsync(CancellationToken cancellationToken);
 }

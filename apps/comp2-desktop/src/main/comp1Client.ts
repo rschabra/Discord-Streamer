@@ -3,6 +3,7 @@ import type {
   ApplianceState,
   BrowserOpenRequest,
   DeveloperModeLaunchResponse,
+  JoinVoiceChannelRequest,
   LoginRequest,
   LoginResponse,
   StreamStartRequest
@@ -50,6 +51,13 @@ export class Comp1Client {
   async launchDiscord(): Promise<ApplianceState> {
     return this.request<ApplianceState>("/api/apps/discord/launch", {
       method: "POST"
+    });
+  }
+
+  async joinVoiceChannel(request: JoinVoiceChannelRequest): Promise<ApplianceState> {
+    return this.request<ApplianceState>("/api/discord/join-voice", {
+      method: "POST",
+      body: JSON.stringify(request)
     });
   }
 

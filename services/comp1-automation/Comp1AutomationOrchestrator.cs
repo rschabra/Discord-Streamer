@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace DiscordStreamer.Comp1.Automation;
 
@@ -102,6 +103,64 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         }
     }
 
+    public async Task<AutomationResult> JoinVoiceChannelAsync(JoinVoiceChannelRequest request, CancellationToken cancellationToken)
+    {
+        var trace = new List<TraceEntry>
+        {
+            Info($"Starting join-voice request for server '{request.ServerName}' and channel '{request.VoiceChannelName}'.")
+        };
+
+        if (string.IsNullOrWhiteSpace(request.ServerName) || string.IsNullOrWhiteSpace(request.VoiceChannelName))
+        {
+            trace.Add(Error("Server name and voice channel name are both required."));
+            return new AutomationResult
+            {
+                Success = false,
+                Error = "Server name and voice channel name are required.",
+                TraceEntries = trace
+            };
+        }
+
+        var discordResult = await LaunchDiscordAsync(cancellationToken);
+        trace.AddRange(discordResult.TraceEntries);
+        if (!discordResult.Success)
+        {
+            return new AutomationResult
+            {
+                Success = false,
+                Error = discordResult.Error,
+                TraceEntries = trace
+            };
+        }
+
+        try
+        {
+            var searchQuery = $"{request.ServerName} #{request.VoiceChannelName}";
+            trace.Add(Info($"Using Discord quick switch search query '{searchQuery}'."));
+
+            await RunDiscordQuickSwitchJoinAsync(searchQuery, cancellationToken);
+
+            trace.Add(Info("Discord quick switch join attempt sent."));
+            trace.Add(Info("Verify that the target voice channel was unique and visible in Discord search results."));
+
+            return new AutomationResult
+            {
+                Success = true,
+                TraceEntries = trace
+            };
+        }
+        catch (Exception ex)
+        {
+            trace.Add(Error($"Join-voice automation failed: {ex.Message}"));
+            return new AutomationResult
+            {
+                Success = false,
+                Error = ex.Message,
+                TraceEntries = trace
+            };
+        }
+    }
+
     public async Task<AutomationResult> StartStreamWorkflowAsync(StreamStartRequest request, CancellationToken cancellationToken)
     {
         var trace = new List<TraceEntry>
@@ -142,8 +201,32 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
             };
         }
 
-        trace.Add(Info("Join-call and begin-stream steps are currently scaffolded for selector tuning."));
-        trace.Add(Info($"Requested Discord destination: {request.ChannelDisplayName ?? request.DiscordChannelId ?? "unspecified"}."));
+        if (!string.IsNullOrWhiteSpace(request.DiscordServerName) || !string.IsNullOrWhiteSpace(request.DiscordVoiceChannelName))
+        {
+            var joinResult = await JoinVoiceChannelAsync(new JoinVoiceChannelRequest
+            {
+                ServerName = request.DiscordServerName ?? "unspecified",
+                VoiceChannelName = request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? "unspecified"
+            }, cancellationToken);
+
+            trace.AddRange(joinResult.TraceEntries);
+            if (!joinResult.Success)
+            {
+                return new AutomationResult
+                {
+                    Success = false,
+                    Error = joinResult.Error,
+                    TraceEntries = trace
+                };
+            }
+        }
+        else
+        {
+            trace.Add(Info("Join-call step was skipped because no server/channel names were provided."));
+        }
+
+        trace.Add(Info("Begin-stream steps are still scaffolded for selector tuning."));
+        trace.Add(Info($"Requested Discord destination: {request.DiscordServerName ?? "unspecified"} / {request.DiscordVoiceChannelName ?? request.ChannelDisplayName ?? request.DiscordChannelId ?? "unspecified"}."));
         trace.Add(Info($"Requested window hint: {request.StreamTarget.WindowTitleHint ?? "none"}."));
 
         await Task.Delay(100, cancellationToken);
@@ -180,4 +263,70 @@ public sealed class Comp1AutomationOrchestrator(Comp1AutomationOptions options) 
         Level = "error",
         Message = message
     };
+
+    private static async Task RunDiscordQuickSwitchJoinAsync(string searchQuery, CancellationToken cancellationToken)
+    {
+        var escapedQuery = EscapeSendKeysText(searchQuery);
+        var script = $$"""
+            $wshell = New-Object -ComObject WScript.Shell
+            if (-not $wshell.AppActivate('Discord')) { throw 'Discord window not found or not focusable.' }
+            Start-Sleep -Milliseconds 700
+            $wshell.SendKeys('^k')
+            Start-Sleep -Milliseconds 400
+            $wshell.SendKeys('^a')
+            Start-Sleep -Milliseconds 100
+            $wshell.SendKeys('{BACKSPACE}')
+            Start-Sleep -Milliseconds 200
+            $wshell.SendKeys('{{escapedQuery}}')
+            Start-Sleep -Milliseconds 600
+            $wshell.SendKeys('{ENTER}')
+            """;
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script.Replace("\"", "\\\"")}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true
+        }) ?? throw new InvalidOperationException("Failed to start PowerShell automation process.");
+
+        await process.WaitForExitAsync(cancellationToken);
+
+        var stdOut = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stdErr = await process.StandardError.ReadToEndAsync(cancellationToken);
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(stdErr)
+                ? $"Quick switch automation failed with exit code {process.ExitCode}. {stdOut}".Trim()
+                : stdErr.Trim());
+        }
+    }
+
+    private static string EscapeSendKeysText(string text)
+    {
+        var builder = new StringBuilder();
+
+        foreach (var character in text)
+        {
+            builder.Append(character switch
+            {
+                '+' => "{+}",
+                '^' => "{^}",
+                '%' => "{%}",
+                '~' => "{~}",
+                '(' => "{(}",
+                ')' => "{)}",
+                '[' => "{[}",
+                ']' => "{]}",
+                '{' => "{{}",
+                '}' => "{}}",
+                _ => character.ToString()
+            });
+        }
+
+        return builder.ToString();
+    }
 }

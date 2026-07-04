@@ -12,6 +12,11 @@ export interface BrowserOpenRequest {
   url: string;
 }
 
+export interface JoinVoiceChannelRequest {
+  serverName: string;
+  voiceChannelName: string;
+}
+
 export type StreamTargetKind = "browser" | "application" | "display";
 
 export interface StreamTarget {
@@ -24,6 +29,8 @@ export interface StreamStartRequest {
   browserUrl?: string;
   discordGuildId?: string;
   discordChannelId?: string;
+  discordServerName?: string;
+  discordVoiceChannelName?: string;
   channelDisplayName?: string;
   streamTarget: StreamTarget;
   includeSystemAudio: boolean;
@@ -45,6 +52,7 @@ export interface ApplianceHealth {
 export interface ApplianceState extends ApplianceHealth {
   currentUrl?: string;
   lastError?: string;
+  selectedDiscordServer?: string;
   selectedDiscordChannel?: string;
   lastTraceEntries: TraceEntry[];
 }
